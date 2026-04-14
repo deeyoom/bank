@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>TERMINAL ACCESS</title>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
+    <style>
+        :root { --neon: #00ff41; --bg: #050505; }
+        body { background: var(--bg); color: #eee; font-family: monospace; margin: 0; padding: 20px; display: flex; justify-content: center; }
+        .terminal { width: 100%; max-width: 400px; background: #111; border: 1px solid #222; border-radius: 12px; padding: 20px; }
+        .viewport { display: none; position: relative; width: 100%; border: 1px solid var(--neon); margin-bottom: 15px; background: #000; }
+        video { width: 100%; display: block; }
+        .scan-frame { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 80%; height: 50px; border: 2px solid var(--neon); box-shadow: 0 0 15px var(--neon); }
+        input { width: 100%; padding: 12px; background: #000; border: 1px solid #222; color: var(--neon); font-size: 18px; text-align: center; margin-bottom: 10px; box-sizing: border-box; }
+        button { width: 100%; padding: 15px; font-weight: bold; border-radius: 6px; cursor: pointer; border: none; margin-bottom: 10px; }
+        .btn-main { background: var(--neon); color: #000; }
+        .btn-cam { background: transparent; color: var(--neon); border: 1px solid var(--neon); }
+        .results { margin-top: 20px; padding: 15px; background: #000; border-left: 3px solid var(--neon); display: none; }
+    </style>
+</head>
+<body>
+
+<div class="terminal">
+    <h2 style="text-align:center; color:var(--neon)">AI_TERMINAL_v7</h2>
+    
+    <div id="viewport" class="viewport">
+        <video id="video" autoplay muted playsinline></video>
+        <div class="scan-frame"></div>
+    </div>
+
+    <div id="status" style="text-align:center; font-size:12px; color:var(--neon); margin-bottom:10px;">READY</div>
+
+    <input type="text" id="acc_input" placeholder="ACCOUNT_NUMBER">
+    <button onclick="manualSearch()" class="btn-main">EXECUTE_SEARCH</button>
+    <button id="cam-btn" onclick="toggleScanner()" class="btn-cam">START_SCANNER</button>
+
+    <div id="results" class="results">
+        <div><b>STATUS:</b> <span style="color:var(--neon)">AUTHORIZED</span></div>
+        <div><b>CLIENT:</b> <span id="res_name"></span></div>
+        <div><b>INFO:</b> <span id="res_info"></span></div>
+    </div>
+</div>
+
+<script>
+    const video = document.getElementById('video');
+    const viewport = document.getElementById('viewport');
+    const status = document.getElementById('status');
+    const input = document.getElementById('acc_input');
+    let isScanning = false;
+    let worker = null;
+
+    async function initOCR() {
+        if (!worker) {
+            status.innerText = "LOADING_AI_ENGINE...";
+            worker = await Tesseract.createWorker();
+            await worker.loadLanguage('eng');
+            await worker.initialize('eng');
+            await worker.setParameters({ tessedit_char_whitelist: '0123456789' });
+        }
+    }
+
+    async function toggleScanner() {
+        if (isScanning) { location.reload(); return; }
+        await initOCR();
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+        video.srcObject = stream;
+        viewport.style.display = 'block';
+        isScanning = true;
+        document.getElementById('cam-btn').innerText = "STOP";
+        scanLoop();
+    }
+
+    async function scanLoop() {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        while (isScanning) {
+            status.innerText = "SCANNING...";
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            ctx.drawImage(video, 0, 0);
+            
+            const { data: { text } } = await worker.recognize(canvas);
+            const digits = text.replace(/\D/g, '').trim();
+            
+            if (digits.length >= 3) {
+                input.value = digits;
+                await manualSearch();
+            }
+            await new Promise(r => setTimeout(r, 1500));
+        }
+    }
+
+    async function manualSearch() {
+        const val = input.value.trim();
+        const res = await fetch('/search', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ acc_num: val })
+        });
+        const data = await res.json();
+        if (data.status === "found") {
+            isScanning = false;
+            document.getElementById('results').style.display = 'block';
+            document.getElementById('res_name').innerText = data.client.full_name;
+            document.getElementById('res_info').innerText = data.client.status;
+            status.innerText = "MATCH_FOUND";
+            if(video.srcObject) video.srcObject.getTracks().forEach(t => t.stop());
+            viewport.style.display = 'none';
+        }
+    }
+</script>
+</body>
+</html>
